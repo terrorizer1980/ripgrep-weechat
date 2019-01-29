@@ -1,0 +1,23 @@
+[package]
+name = "weechat-ripgrep"
+version = "0.1.0"
+authors = ["Damir Jelić <poljar@termina.org.uk>"]
+edition = "2018"
+
+[lib]
+name = "ripgrep"
+crate-type = ["dylib"]
+
+[dependencies]
+libc = "*"
+
+grep-searcher = "*"
+grep-matcher = "*"
+grep-regex = "*"
+
+clap = "*"
+
+pipe-channel = "*"
+
+weechat = { git = "https://github.com/poljar/rust-weechat" }
+weechat-sys = { git = "https://github.com/poljar/rust-weechat" }
