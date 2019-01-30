@@ -10,12 +10,14 @@ extern crate grep_regex;
 extern crate grep_searcher;
 
 use clap::{App, Arg};
+use std::path::PathBuf;
+use std::str::FromStr;
 
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
 use grep_searcher::sinks::Lossy;
 
-use std::{thread, time};
+use std::{thread};
 use pipe_channel::{channel, Sender, Receiver};
 
 use weechat::{
@@ -30,7 +32,7 @@ use weechat::{
 };
 use weechat::hooks::FdHookMode;
 
-static mut _weechat: Option<Weechat> = None;
+static mut _WEECHAT: Option<Weechat> = None;
 
 type SearchResult = Result<Vec<String>, i32>;
 
@@ -38,12 +40,12 @@ type SearchResult = Result<Vec<String>, i32>;
 struct Ripgrep {
     thread: Option<thread::JoinHandle<()>>,
     fd_hook: Option<FdHook<(), Receiver<SearchResult>>>,
-    command: CommandHook<()>
+    _command: CommandHook<()>
 }
 
 fn get_weechat() -> &'static mut Weechat {
     unsafe {
-        match &mut _weechat {
+        match &mut _WEECHAT {
             Some(x) => x,
             None => panic!(),
         }
@@ -90,8 +92,40 @@ impl Ripgrep {
         }
     }
 
+    fn get_file_by_buffer(buffer: Buffer) -> Option<PathBuf> {
+        let weechat = get_weechat();
+        let infolist = weechat.infolist_get("logger_buffer", "");
+
+        let infolist = match infolist {
+            Some(list) => list,
+            None => return None
+        };
+
+        while infolist.next() {
+            let other_buffer = infolist.get_buffer();
+            match other_buffer {
+                Some(other_buffer) => {
+                    if buffer == other_buffer {
+                        let path = infolist.get_string("log_filename");
+                        let path = PathBuf::from_str(path);
+
+                        match path {
+                            Ok(p) => return Some(p),
+                            Err(_) => return None
+                        };
+
+                    }
+                }
+
+                None => continue
+            }
+        }
+
+        None
+    }
+
     fn search(
-        file: String,
+        file: PathBuf,
         matcher: RegexMatcher,
         mut sender: Sender<SearchResult>
     ) {
@@ -102,7 +136,7 @@ impl Ripgrep {
             Ok(true)
         });
 
-        Searcher::new().search_path(&matcher, file, sink);
+        Searcher::new().search_path(&matcher, file.canonicalize().unwrap(), sink);
 
         sender.send(Ok(matches)).unwrap();
     }
@@ -110,43 +144,53 @@ impl Ripgrep {
     fn command_cb(_data: &(), buffer: Buffer, args: ArgsWeechat) {
         let plugin = get_plugin();
         let weechat = get_weechat();
-        buffer.print("Sending to thread!");
-
         let parsed_args = App::new("rg")
-            .arg(Arg::with_name("file")
-                               .short("f")
-                               .long("file")
-                               .value_name("FILE")
-                               .help("File to search")
-                               .takes_value(true))
+            .arg(Arg::with_name("pattern")
+                               .index(1)
+                               .value_name("PATTERN")
+                               .help("A regular expression used for
+                                     searching.")
+                               .multiple(true))
             .get_matches_from_safe(args).unwrap();
 
-        if let Some(file) = parsed_args.value_of("file") {
-            let file = file.to_string();
-            let matcher = match RegexMatcher::new(r"weechat\.") {
-                Ok(m) => m,
-                Err(_) => {
-                    weechat.print("Invalid regex");
-                    return
-                }
-            };
+        let file = Ripgrep::get_file_by_buffer(buffer);
 
-            let (tx, rx) = channel();
+        let file = match file {
+            Some(f) => f,
+            None => return
+        };
 
-            let fd_hook = weechat.hook_fd(
-                rx,
-                FdHookMode::Write,
-                Ripgrep::fd_hook_cb,
-                None,
-            );
+        let pattern = match parsed_args.value_of("pattern") {
+            Some(p) => p,
+            None => {
+                weechat.print("Invalid pattern");
+                return
+            }
+        };
 
-            let handle = thread::spawn(
-                move || Ripgrep::search(file, matcher, tx)
-            );
+        let matcher = match RegexMatcher::new(pattern) {
+            Ok(m) => m,
+            Err(_) => {
+                weechat.print("Invalid regex");
+                return
+            }
+        };
 
-            plugin.thread = Some(handle);
-            plugin.fd_hook = Some(fd_hook);
-        }
+        let (tx, rx) = channel();
+
+        let fd_hook = weechat.hook_fd(
+            rx,
+            FdHookMode::Write,
+            Ripgrep::fd_hook_cb,
+            None,
+        );
+
+        let handle = thread::spawn(
+            move || Ripgrep::search(file, matcher, tx)
+        );
+
+        plugin.thread = Some(handle);
+        plugin.fd_hook = Some(fd_hook);
     }
 }
 
@@ -164,13 +208,13 @@ impl WeechatPlugin for Ripgrep {
         );
 
         unsafe {
-            _weechat = Some(weechat);
+            _WEECHAT = Some(weechat);
         }
 
         Ok(Ripgrep {
             thread: None,
             fd_hook: None,
-            command
+            _command: command
         })
     }
 }
