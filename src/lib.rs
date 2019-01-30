@@ -9,6 +9,8 @@ extern crate grep_matcher;
 extern crate grep_regex;
 extern crate grep_searcher;
 
+mod buffer;
+
 use clap::{App, Arg};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -31,6 +33,8 @@ use weechat::{
     Buffer
 };
 use weechat::hooks::FdHookMode;
+
+use buffer::GrepBuffer;
 
 static mut _WEECHAT: Option<Weechat> = None;
 
@@ -66,24 +70,34 @@ impl Ripgrep {
         self.thread = None;
     }
 
+    fn print_results(result: SearchResult) {
+        let weechat = get_weechat();
+
+        let rgbuffer = GrepBuffer::get_buffer(weechat);
+
+        rgbuffer.print_status("Search for TODO");
+        match result {
+            Ok(result) => {
+                for line in result {
+                    rgbuffer.print(&line);
+                }
+            }
+            Err(errno) => {
+                weechat.print(
+                    &format!("Error searching: {}", errno.to_string())
+                )
+            }
+        }
+        rgbuffer.print_status("Summary of search TODO");
+    }
+
     fn fd_hook_cb(_data: &(), receiver: &mut Receiver<SearchResult>) {
         let weechat = get_weechat();
         let plugin = get_plugin();
 
         match receiver.recv() {
             Ok(data) => {
-                match data {
-                    Ok(lines) => {
-                        for line in lines {
-                            weechat.print(&line);
-                        }
-                    }
-                    Err(errno) => {
-                        weechat.print(
-                            &format!("Error searching: {}", errno.to_string())
-                        )
-                    }
-                }
+                Ripgrep::print_results(data);
             }
             Err(_) => {
                 plugin.join_thread();
