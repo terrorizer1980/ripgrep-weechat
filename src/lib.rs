@@ -12,12 +12,12 @@ extern crate grep_searcher;
 mod buffer;
 
 use clap::{App, Arg};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
-use std::io::Error;
+use std::io;
 use grep_searcher::sinks::Lossy;
 
 use std::{thread};
@@ -39,7 +39,7 @@ use buffer::GrepBuffer;
 
 static mut _WEECHAT: Option<Weechat> = None;
 
-type SearchResult = Result<Vec<String>, Error>;
+type SearchResult = Result<Vec<String>, io::Error>;
 
 
 struct Ripgrep {
@@ -124,28 +124,22 @@ impl Ripgrep {
         plugin.fd_hook = None;
     }
 
-    fn get_file_by_buffer(buffer: Buffer) -> Option<PathBuf> {
+    fn file_from_infolist(buffer: &Buffer) -> String {
         let weechat = get_weechat();
         let infolist = weechat.infolist_get("logger_buffer", "");
 
         let infolist = match infolist {
             Some(list) => list,
-            None => return None
+            None => return "".to_owned()
         };
 
         while infolist.next() {
             let other_buffer = infolist.get_buffer();
             match other_buffer {
                 Some(other_buffer) => {
-                    if buffer == other_buffer {
+                    if *buffer == other_buffer {
                         let path = infolist.get_string("log_filename");
-                        let path = PathBuf::from_str(path);
-
-                        match path {
-                            Ok(p) => return Some(p),
-                            Err(_) => return None
-                        };
-
+                        return path.to_owned()
                     }
                 }
 
@@ -153,7 +147,33 @@ impl Ripgrep {
             }
         }
 
-        None
+        "".to_owned()
+    }
+
+    fn file_from_name(full_name: &str) -> PathBuf {
+        let weechat = get_weechat();
+        let weechat_home = weechat.info_get("weechat_dir", "");
+        let mut file = Path::new(weechat_home).join("logs");
+        let mut full_name = full_name.to_owned();
+        full_name.push_str(".weechatlog");
+        file.push(full_name);
+        file
+    }
+
+    fn get_file_by_buffer(buffer: Buffer) -> Option<PathBuf> {
+        let path = Ripgrep::file_from_infolist(&buffer);
+
+        if path.is_empty() {
+            let full_name = buffer.full_name().to_string().to_lowercase();
+            return Some(Ripgrep::file_from_name(&full_name));
+        }
+
+        let path = PathBuf::from_str(&path);
+
+        match path {
+            Ok(p) => Some(p),
+            Err(_) => None
+        }
     }
 
     fn search(
