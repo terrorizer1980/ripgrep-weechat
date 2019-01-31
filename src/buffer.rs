@@ -40,10 +40,10 @@ impl GrepBuffer {
     }
 
     fn split_line(line: &str) -> (&str, &str, String) {
-        let tab_count = line.matches("\t").count();
+        let tab_count = line.matches('\t').count();
 
         let (date, nick, msg) = if tab_count >= 2 {
-            let vec: Vec<&str> = line.splitn(3, "\t").collect();
+            let vec: Vec<&str> = line.splitn(3, '\t').collect();
             (vec[0], vec[1], vec[2])
         } else {
             ("", "", line)
@@ -56,19 +56,50 @@ impl GrepBuffer {
     pub fn format_line(&self, line: &str) -> String {
         let weechat = self.buffer.get_weechat();
         let (date, nick, msg) = GrepBuffer::split_line(line);
+        let nick = self.colorize_nick(nick);
         format!(
-            "{date_color}{date} {nick_color}{nick}{reset_color} {msg}",
-            date_color=weechat.color("blue"),
+            "{date_color}{date}{reset} {nick} {msg}",
+            date_color=weechat.color("brown"),
             date=date,
-            nick_color=weechat.color("green"),
+            reset=weechat.color("reset"),
             nick=nick,
-            reset_color=weechat.color("reset"),
             msg=msg
         )
     }
 
     pub fn print(&self, line: &str) {
         self.buffer.print(&self.format_line(line));
+    }
+
+    pub fn colorize_nick(&self, nick: &str) -> String {
+        if nick.is_empty() {
+            return "".to_owned();
+        }
+
+        let weechat = self.buffer.get_weechat();
+        // TODO colorize the nick prefix and suffix
+        // TODO handle the extra nick prefix and suffix settings
+
+        let (prefix, nick) = {
+            let first_char = nick.chars().next();
+            match first_char {
+                Some('&') | Some('@') | Some('!') | Some('+') | Some('%') => {
+                    (first_char, &nick[1..])
+                }
+                Some(_)   => (None, nick),
+                None      => (None, nick),
+            }
+        };
+
+        let nick_color = weechat.info_get("nick_color_name", nick);
+
+        format!(
+            "{}{}{}{}",
+            prefix.unwrap_or_default(),
+            weechat.color(nick_color),
+            nick,
+            weechat.color("reset")
+        )
     }
 
     pub fn print_status(&self, line: &str) {

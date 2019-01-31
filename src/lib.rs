@@ -92,7 +92,6 @@ impl Ripgrep {
     }
 
     fn fd_hook_cb(_data: &(), receiver: &mut Receiver<SearchResult>) {
-        let weechat = get_weechat();
         let plugin = get_plugin();
 
         match receiver.recv() {
