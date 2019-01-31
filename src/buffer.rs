@@ -91,11 +91,16 @@ impl GrepBuffer {
             }
         };
 
+        let prefix = match prefix {
+            Some(p) => p.to_string(),
+            None => "".to_owned()
+        };
+
         let nick_color = weechat.info_get("nick_color_name", nick);
 
         format!(
             "{}{}{}{}",
-            prefix.unwrap_or_default(),
+            prefix,
             weechat.color(nick_color),
             nick,
             weechat.color("reset")
