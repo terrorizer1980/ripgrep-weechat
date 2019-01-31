@@ -17,6 +17,7 @@ use std::str::FromStr;
 
 use grep_regex::RegexMatcher;
 use grep_searcher::Searcher;
+use std::io::Error;
 use grep_searcher::sinks::Lossy;
 
 use std::{thread};
@@ -38,13 +39,17 @@ use buffer::GrepBuffer;
 
 static mut _WEECHAT: Option<Weechat> = None;
 
-type SearchResult = Result<Vec<String>, i32>;
+type SearchResult = Result<Vec<String>, Error>;
 
 
 struct Ripgrep {
-    thread: Option<thread::JoinHandle<()>>,
-    fd_hook: Option<FdHook<(), Receiver<SearchResult>>>,
+    thread: Option<thread::JoinHandle<SearchResult>>,
+    fd_hook: Option<FdHook<(), Receiver<ThreadMsg>>>,
     _command: CommandHook<()>
+}
+
+enum ThreadMsg {
+    Done,
 }
 
 fn get_weechat() -> &'static mut Weechat {
@@ -67,7 +72,20 @@ fn get_plugin() -> &'static mut Ripgrep {
 
 impl Ripgrep {
     fn join_thread(&mut self) {
-        self.thread = None;
+        let weechat = get_weechat();
+
+        let handle = self.thread.take();
+
+        let handle = match handle {
+            Some(h) => h,
+            None => return
+        };
+        let result = handle.join();
+
+        match result {
+            Ok(result) => Ripgrep::print_results(result),
+            Err(_) => weechat.print("Error in search thread")
+        };
     }
 
     fn print_results(result: SearchResult) {
@@ -91,18 +109,19 @@ impl Ripgrep {
         rgbuffer.print_status("Summary of search TODO");
     }
 
-    fn fd_hook_cb(_data: &(), receiver: &mut Receiver<SearchResult>) {
+    fn fd_hook_cb(_data: &(), receiver: &mut Receiver<ThreadMsg>) {
         let plugin = get_plugin();
 
         match receiver.recv() {
-            Ok(data) => {
-                Ripgrep::print_results(data);
+            Ok(_) => {
+                plugin.join_thread();
             }
             Err(_) => {
                 plugin.join_thread();
-                plugin.fd_hook = None;
             }
         }
+
+        plugin.fd_hook = None;
     }
 
     fn get_file_by_buffer(buffer: Buffer) -> Option<PathBuf> {
@@ -140,8 +159,8 @@ impl Ripgrep {
     fn search(
         file: PathBuf,
         matcher: RegexMatcher,
-        mut sender: Sender<SearchResult>
-    ) {
+        mut sender: Sender<ThreadMsg>
+    ) -> SearchResult {
         let mut matches: Vec<String> = vec![];
 
         let sink = Lossy(|_, line| {
@@ -149,9 +168,10 @@ impl Ripgrep {
             Ok(true)
         });
 
-        Searcher::new().search_path(&matcher, file.canonicalize().unwrap(), sink);
+        Searcher::new().search_path(&matcher, file, sink)?;
 
-        sender.send(Ok(matches)).unwrap();
+        sender.send(ThreadMsg::Done).unwrap();
+        Ok(matches)
     }
 
     fn command_cb(_data: &(), buffer: Buffer, args: ArgsWeechat) {
