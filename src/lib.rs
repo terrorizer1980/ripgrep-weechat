@@ -1,14 +1,3 @@
-#[macro_use]
-extern crate weechat;
-
-extern crate pipe_channel;
-
-extern crate clap;
-
-extern crate grep_matcher;
-extern crate grep_regex;
-extern crate grep_searcher;
-
 mod buffer;
 
 use clap::{App, Arg};
@@ -34,6 +23,7 @@ use weechat::{
     Buffer
 };
 use weechat::hooks::FdHookMode;
+use weechat::weechat_plugin;
 
 use buffer::GrepBuffer;
 
@@ -139,7 +129,10 @@ impl Ripgrep {
                 Some(other_buffer) => {
                     if *buffer == other_buffer {
                         let path = infolist.get_string("log_filename");
-                        return path.to_owned()
+                        match path {
+                            Some(p) => return p.to_string(),
+                            None => continue
+                        }
                     }
                 }
 
@@ -152,8 +145,8 @@ impl Ripgrep {
 
     fn file_from_name(full_name: &str) -> PathBuf {
         let weechat = get_weechat();
-        let weechat_home = weechat.info_get("weechat_dir", "");
-        let mut file = Path::new(weechat_home).join("logs");
+        let weechat_home = weechat.info_get("weechat_dir", "").unwrap();
+        let mut file = Path::new(weechat_home.as_ref()).join("logs");
         let mut full_name = full_name.to_owned();
         full_name.push_str(".weechatlog");
         file.push(full_name);
@@ -164,7 +157,7 @@ impl Ripgrep {
         let path = Ripgrep::file_from_infolist(&buffer);
 
         if path.is_empty() {
-            let full_name = buffer.full_name().to_string().to_lowercase();
+            let full_name = buffer.get_full_name().to_string().to_lowercase();
             return Some(Ripgrep::file_from_name(&full_name));
         }
 
@@ -279,9 +272,9 @@ impl Drop for Ripgrep {
 
 weechat_plugin!(
     Ripgrep,
-    name: b"ripgrep\0"; 8,
-    author: b"Damir Jelic <poljar@termina.org.uk>\0"; 36,
-    description: b"Search in buffers and logs using ripgrep\0"; 41,
-    version: b"0.1.0\0"; 6,
-    license: b"ISC\0"; 4
+    name: "ripgrep",
+    author: "Damir Jelic <poljar@termina.org.uk>",
+    description: "Search in buffers and logs using ripgrep",
+    version: "0.1.0",
+    license: "ISC"
 );
