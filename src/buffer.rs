@@ -1,5 +1,3 @@
-extern crate weechat;
-
 use weechat::{
     Weechat,
     Buffer
@@ -119,5 +117,9 @@ impl GrepBuffer {
                 line
             )
         )
+    }
+
+    pub fn switch_to(&self) {
+        self.buffer.switch_to();
     }
 }

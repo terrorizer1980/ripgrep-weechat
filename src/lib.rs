@@ -20,10 +20,14 @@ use weechat::{
     FdHook,
     CommandHook,
     CommandDescription,
-    Buffer
+    Buffer,
+    Config,
+    ConfigSectionInfo,
+    BooleanOption
 };
 use weechat::hooks::FdHookMode;
 use weechat::weechat_plugin;
+use weechat::config_options::ConfigOption;
 
 use buffer::GrepBuffer;
 
@@ -35,6 +39,8 @@ type SearchResult = Result<Vec<String>, io::Error>;
 struct Ripgrep {
     thread: Option<thread::JoinHandle<SearchResult>>,
     fd_hook: Option<FdHook<(), Receiver<ThreadMsg>>>,
+    _config: Config<()>,
+    go_to_buffer_opt: BooleanOption,
     _command: CommandHook<()>
 }
 
@@ -80,6 +86,7 @@ impl Ripgrep {
 
     fn print_results(result: SearchResult) {
         let weechat = get_weechat();
+        let plugin = get_plugin();
 
         let rgbuffer = GrepBuffer::get_buffer(weechat);
 
@@ -97,6 +104,11 @@ impl Ripgrep {
             }
         }
         rgbuffer.print_status("Summary of search TODO");
+
+        if plugin.go_to_buffer_opt.value() {
+            rgbuffer.switch_to();
+        }
+
     }
 
     fn fd_hook_cb(_data: &(), receiver: &mut Receiver<ThreadMsg>) {
@@ -253,6 +265,25 @@ impl WeechatPlugin for Ripgrep {
             None
         );
 
+        let mut config = weechat.config_new("ripgrep", None, None);
+
+        let section_info: ConfigSectionInfo<()> = ConfigSectionInfo {
+            name: "main",
+            ..Default::default()
+        };
+
+        let section = config.new_section(section_info);
+
+        let option = section.new_boolean_option(
+            "go_to_buffer",
+            "Automatically go to grep buffer when search is over.",
+            true,
+            true,
+            false,
+            None,
+            None::<()>
+        );
+
         unsafe {
             _WEECHAT = Some(weechat);
         }
@@ -260,6 +291,8 @@ impl WeechatPlugin for Ripgrep {
         Ok(Ripgrep {
             thread: None,
             fd_hook: None,
+            _config: config,
+            go_to_buffer_opt: option,
             _command: command
         })
     }
