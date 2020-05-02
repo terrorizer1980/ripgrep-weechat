@@ -1,129 +1,52 @@
 mod buffer;
 
 use clap::{App, Arg};
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::{channel, Sender, Receiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use grep_regex::RegexMatcher;
+use grep_searcher::sinks::Lossy;
 use grep_searcher::Searcher;
 use std::io;
-use grep_searcher::sinks::Lossy;
 
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
-use weechat::{
-    Weechat,
-    WeechatPlugin,
-    ArgsWeechat,
-};
+use weechat::{infolist::InfolistVariable, ArgsWeechat, Weechat, WeechatPlugin};
 
+use weechat::buffer::{Buffer, BufferInputCallback};
+use weechat::config::{BooleanOptionSettings, Config, ConfigOption, ConfigSectionSettings};
+use weechat::hooks::{Command, CommandCallback, CommandSettings};
 use weechat::weechat_plugin;
-use weechat::config::{Config, ConfigOption, ConfigSectionSettings, BooleanOptionSettings};
-use weechat::hooks::{CommandHook, CommandDescription};
-use weechat::buffer::Buffer;
 
 use buffer::GrepBuffer;
 
 type SearchResult = Result<Vec<String>, io::Error>;
 
-
 struct Ripgrep {
     _config: Rc<RefCell<Config>>,
-    _command: CommandHook<CommandData>,
+    _command: Command,
     _runtime: Rc<RefCell<Option<Runtime>>>,
 }
 
-#[derive(Clone, Default)]
-struct CommandData {
-    config: Option<Rc<RefCell<Config>>>,
+#[derive(Clone)]
+struct RipgrepCommand {
+    config: Rc<RefCell<Config>>,
     buffer: Rc<RefCell<Option<GrepBuffer>>>,
     runtime: Rc<RefCell<Option<Runtime>>>,
+    last_search_file: Rc<RefCell<Option<PathBuf>>>,
 }
 
-impl Ripgrep {
-    fn file_from_infolist(buffer: &Buffer) -> String {
-        todo!()
-        // let infolist = weechat.infolist_get("logger_buffer", "");
-
-        // let infolist = match infolist {
-        //     Some(list) => list,
-        //     None => return "".to_owned()
-        // };
-
-        // while infolist.next() {
-        //     let other_buffer = infolist.get_buffer();
-        //     match other_buffer {
-        //         Some(other_buffer) => {
-        //             if *buffer == other_buffer {
-        //                 let path = infolist.get_string("log_filename");
-        //                 match path {
-        //                     Some(p) => return p.to_string(),
-        //                     None => continue
-        //                 }
-        //             }
-        //         }
-
-        //         None => continue
-        //     }
-        // }
-
-        // "".to_owned()
-    }
-
-    fn file_from_name(full_name: &str) -> PathBuf {
-        todo!()
-        // let weechat_home = weechat.info_get("weechat_dir", "").unwrap();
-        // let mut file = Path::new(weechat_home.as_ref()).join("logs");
-        // let mut full_name = full_name.to_owned();
-        // full_name.push_str(".weechatlog");
-        // file.push(full_name);
-        // file
-    }
-
-    fn get_file_by_buffer(buffer: &Buffer) -> Option<PathBuf> {
-        Some(PathBuf::from_str("/home/poljar/.weechat/logs/python.termina.!awifyyvrdfpauymuut:termina.org.uk.weechatlog").expect("Can't create pathbuf from string"))
-        // let path = Ripgrep::file_from_infolist(&buffer);
-
-        // if path.is_empty() {
-        //     let full_name = buffer.get_full_name().to_string().to_lowercase();
-        //     return Some(Ripgrep::file_from_name(&full_name));
-        // }
-
-        // let path = PathBuf::from_str(&path);
-
-        // match path {
-        //     Ok(p) => Some(p),
-        //     Err(_) => None
-        // }
-    }
-
-    async fn search(
-        file: PathBuf,
-        matcher: RegexMatcher,
-        mut sender: Sender<SearchResult>
-    ) {
-        let mut matches: Vec<String> = vec![];
-
-        let sink = Lossy(|_, line| {
-            matches.push(line.to_string());
-            Ok(true)
-        });
-
-        match Searcher::new().search_path(&matcher, file, sink) {
-            Ok(_) => sender.send(Ok(matches)),
-            Err(e) => sender.send(Err(e)),
-        }.await.unwrap_or(());
-    }
-
-    async fn recieve_result(command_data: CommandData, mut receiver: Receiver<SearchResult>) {
-        let buffer = &command_data.buffer;
+impl RipgrepCommand {
+    async fn receive_result(&self, mut receiver: Receiver<SearchResult>) {
+        let buffer = &self.buffer;
         let buffer_exists = buffer.borrow().is_some();
 
         if !buffer_exists {
-            let buffer_handle = GrepBuffer::new(&command_data);
+            let buffer_handle = GrepBuffer::new(&self);
             *buffer.borrow_mut() = Some(buffer_handle);
         }
 
@@ -146,16 +69,12 @@ impl Ripgrep {
                     buffer.print(&line);
                 }
             }
-            Err(e) => {
-                Weechat::print(
-                    &format!("Error searching: {}", e.to_string())
-                )
-            }
+            Err(e) => Weechat::print(&format!("Error searching: {}", e.to_string())),
         }
 
         buffer.print_status("Summary of search TODO");
 
-        let config = command_data.config.as_ref().unwrap().borrow();
+        let config = self.config.borrow();
         let section = config.search_section("main").unwrap();
         let go_to_buffer = section.search_option("go_to_buffer").unwrap();
 
@@ -169,36 +88,138 @@ impl Ripgrep {
         }
     }
 
-    fn search_command_callback(command_data: &CommandData, buffer: Buffer, args: ArgsWeechat) {
+    async fn receive_result_helper(command: RipgrepCommand, rx: Receiver<SearchResult>) {
+        command.receive_result(rx).await
+    }
+
+    fn file_from_infolist(&self, weechat: &Weechat, buffer: &Buffer) -> Option<String> {
+        let mut infolist = weechat.get_infolist("logger_buffer", None).ok()?;
+
+        while let Some(item) = infolist.next() {
+            let info_buffer = if let Some(b) = item.get("buffer") {
+                b
+            } else {
+                continue;
+            };
+
+            if let InfolistVariable::Buffer(info_buffer) = info_buffer {
+                if buffer == &info_buffer {
+                    let path = item.get("log_filename")?;
+
+                    if let InfolistVariable::String(path) = path {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn file_from_name(&self, full_name: &str) -> PathBuf {
+        let weechat_home = Weechat::info_get("weechat_dir", "").expect("Can't find Weechat home");
+        let mut file = Path::new(&weechat_home).join("logs");
+        let mut full_name = full_name.to_owned();
+        full_name.push_str(".weechatlog");
+        file.push(full_name);
+        file
+    }
+
+    fn get_file_by_buffer(&self, weechat: &Weechat, buffer: &Buffer) -> Option<PathBuf> {
+        let path = self.file_from_infolist(weechat, buffer);
+
+        if let Some(path) = path {
+            PathBuf::from_str(&path)
+        } else {
+            let full_name = buffer.full_name().to_lowercase();
+            Ok(self.file_from_name(&full_name))
+        }
+        .ok()
+    }
+
+    async fn search(file: PathBuf, matcher: RegexMatcher, mut sender: Sender<SearchResult>) {
+        let mut matches: Vec<String> = vec![];
+
+        let sink = Lossy(|_, line| {
+            matches.push(line.to_string());
+            Ok(true)
+        });
+
+        match Searcher::new().search_path(&matcher, file, sink) {
+            Ok(_) => sender.send(Ok(matches)),
+            Err(e) => sender.send(Err(e)),
+        }
+        .await
+        .unwrap_or(());
+    }
+}
+
+impl BufferInputCallback for RipgrepCommand {
+    fn callback(&mut self, weechat: &Weechat, buffer: &Buffer, input: Cow<str>) -> Result<(), ()> {
+        let file = self.get_file_by_buffer(weechat, buffer);
+
+        let file = match file {
+            Some(f) => f,
+            None => return Err(()),
+        };
+
+        let matcher = match RegexMatcher::new(&input) {
+            Ok(m) => m,
+            Err(e) => {
+                buffer.print(&format!(
+                    "{} Invalid regular expression {:?}",
+                    Weechat::prefix("error"),
+                    e
+                ));
+                return Err(());
+            }
+        };
+
+        let (tx, rx) = channel(1);
+
+        self.runtime
+            .borrow_mut()
+            .as_ref()
+            .unwrap()
+            .spawn(RipgrepCommand::search(file, matcher, tx));
+        Weechat::spawn(RipgrepCommand::receive_result_helper(self.clone(), rx));
+
+        Ok(())
+    }
+}
+
+impl CommandCallback for RipgrepCommand {
+    fn callback(&mut self, weechat: &Weechat, buffer: &Buffer, arguments: ArgsWeechat) {
         let parsed_args = App::new("rg")
-            .arg(Arg::with_name("pattern")
-                               .index(1)
-                               .value_name("PATTERN")
-                               .help("A regular expression used for
-                                     searching.")
-                               .multiple(true))
-            .get_matches_from_safe(args);
+            .arg(
+                Arg::with_name("pattern")
+                    .index(1)
+                    .value_name("PATTERN")
+                    .help("A regular expression used for searching.")
+                    .multiple(true),
+            )
+            .get_matches_from_safe(arguments);
 
         let parsed_args = match parsed_args {
             Ok(a) => a,
             Err(e) => {
                 Weechat::print(&format!("Error parsing grep args {}", e));
                 return;
-            },
+            }
         };
 
-        let file = Ripgrep::get_file_by_buffer(&buffer);
+        let file = self.get_file_by_buffer(weechat, buffer);
 
         let file = match file {
             Some(f) => f,
-            None => return
+            None => return,
         };
 
         let pattern = match parsed_args.value_of("pattern") {
             Some(p) => p,
             None => {
                 Weechat::print("Invalid pattern");
-                return
+                return;
             }
         };
 
@@ -206,14 +227,18 @@ impl Ripgrep {
             Ok(m) => m,
             Err(_) => {
                 Weechat::print("Invalid regex");
-                return
+                return;
             }
         };
 
         let (tx, rx) = channel(1);
 
-        command_data.runtime.borrow_mut().as_ref().unwrap().spawn(Ripgrep::search(file, matcher, tx));
-        Weechat::spawn(Ripgrep::recieve_result(command_data.clone(), rx));
+        self.runtime
+            .borrow_mut()
+            .as_ref()
+            .unwrap()
+            .spawn(RipgrepCommand::search(file, matcher, tx));
+        Weechat::spawn(RipgrepCommand::receive_result_helper(self.clone(), rx));
     }
 }
 
@@ -223,34 +248,33 @@ impl WeechatPlugin for Ripgrep {
 
         {
             let section_settings = ConfigSectionSettings::new("main");
-            let mut section = config.new_section(section_settings).expect("Can't create main config section");
+            let mut section = config
+                .new_section(section_settings)
+                .expect("Can't create main config section");
 
             let option_settings = BooleanOptionSettings::new("go_to_buffer")
                 .description("Automatically go to grep buffer when search is over.")
                 .default_value(true);
 
-            section.new_boolean_option(option_settings).expect("Can't create boolean option");
+            section
+                .new_boolean_option(option_settings)
+                .expect("Can't create boolean option");
         }
 
         let config = Rc::new(RefCell::new(config));
 
-        let command_info = CommandDescription {
-            name: "rg",
-            ..Default::default()
-        };
+        let command_info = CommandSettings::new("rg");
 
         let runtime = Rc::new(RefCell::new(Some(Runtime::new().unwrap())));
 
-        let command_data = CommandData {
-            runtime: runtime.clone(),
-            buffer: Rc::new(RefCell::new(None)),
-            config: Some(config.clone()),
-        };
-
         let command = weechat.hook_command(
             command_info,
-            Ripgrep::search_command_callback,
-            Some(command_data),
+            RipgrepCommand {
+                runtime: runtime.clone(),
+                buffer: Rc::new(RefCell::new(None)),
+                config: config.clone(),
+                last_search_file: Rc::new(RefCell::new(None)),
+            },
         );
 
         Ok(Ripgrep {
