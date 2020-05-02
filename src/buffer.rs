@@ -1,40 +1,66 @@
-use weechat::{
-    Weechat,
-    Buffer
-};
+use weechat::Weechat;
+use clap::{App, Arg};
+use std::rc::Rc;
+use std::cell::RefCell;
+use weechat::buffer::{Buffer, BufferHandle, BufferSettings, BufferInputCallbackAsync, BufferSettingsAsync};
+use std::borrow::Cow;
+use crate::{Ripgrep, CommandData};
+use grep_regex::RegexMatcher;
+use tokio::sync::mpsc::{channel, Sender, Receiver};
+use grep_searcher::Searcher;
+use tokio::runtime::Runtime;
+use async_trait::async_trait;
 
 pub(crate) struct GrepBuffer {
-    buffer: Buffer
+    buffer: BufferHandle,
+    grep: Grep,
+}
+
+#[derive(Clone)]
+pub struct Grep {
+    command_data: CommandData,
+}
+
+#[async_trait(?Send)]
+impl BufferInputCallbackAsync for Grep {
+    async fn callback(&mut self, buffer: BufferHandle, input: String) {
+        let buffer = buffer.upgrade().unwrap();
+
+        let file = Ripgrep::get_file_by_buffer(&buffer);
+
+        let file = match file {
+            Some(f) => f,
+            None => return,
+        };
+
+        let matcher = match RegexMatcher::new(&input) {
+            Ok(m) => m,
+            Err(_) => {
+                Weechat::print("Invalid regex");
+                return;
+            }
+        };
+
+        let (tx, rx) = channel(1);
+
+        self.command_data.runtime.borrow_mut().as_ref().unwrap().spawn(Ripgrep::search(file, matcher, tx));
+        Ripgrep::recieve_result(self.command_data.clone(), rx).await;
+    }
 }
 
 impl GrepBuffer {
-    pub(crate) fn new(weechat: &Weechat) -> GrepBuffer {
-        let buffer = weechat.buffer_new(
-            "ripgrep",
-            None,
-            None::<()>,
-            None,
-            None::<()>,
-        );
+    pub(crate) fn new(command_data: &CommandData) -> GrepBuffer {
+        let grep = Grep { command_data: command_data.clone() };
+        let settings = BufferSettingsAsync::new("ripgrep").input_callback(grep.clone());
+        let buffer_handle = Weechat::buffer_new_with_async(settings).unwrap();
+        let buffer = buffer_handle.upgrade().unwrap();
+
         buffer.disable_nicklist();
         buffer.disable_time_for_each_line();
         buffer.disable_log();
         buffer.set_title("ripgrep output buffer");
-        GrepBuffer { buffer }
-    }
 
-    pub(crate) fn from_buffer(buffer: Buffer) -> GrepBuffer {
-        GrepBuffer { buffer }
-    }
-
-    pub(crate) fn get_buffer(weechat: &Weechat) -> GrepBuffer {
-        let rgbuffer = weechat.buffer_search("ripgrep", "ripgrep");
-
-        match rgbuffer {
-            Some(buffer) => GrepBuffer::from_buffer(buffer),
-            None => GrepBuffer::new(weechat)
-
-        }
+        GrepBuffer { buffer: buffer_handle, grep }
     }
 
     fn split_line(line: &str) -> (&str, &str, String) {
@@ -52,21 +78,20 @@ impl GrepBuffer {
     }
 
     pub fn format_line(&self, line: &str) -> String {
-        let weechat = self.buffer.get_weechat();
         let (date, nick, msg) = GrepBuffer::split_line(line);
         let nick = self.colorize_nick(nick);
         format!(
             "{date_color}{date}{reset} {nick} {msg}",
-            date_color=weechat.color("brown"),
+            date_color=Weechat::color("brown"),
             date=date,
-            reset=weechat.color("reset"),
+            reset=Weechat::color("reset"),
             nick=nick,
             msg=msg
         )
     }
 
     pub fn print(&self, line: &str) {
-        self.buffer.print(&self.format_line(line));
+        self.buffer.upgrade().unwrap().print(&self.format_line(line));
     }
 
     pub fn colorize_nick(&self, nick: &str) -> String {
@@ -74,7 +99,6 @@ impl GrepBuffer {
             return "".to_owned();
         }
 
-        let weechat = self.buffer.get_weechat();
         // TODO colorize the nick prefix and suffix
         // TODO handle the extra nick prefix and suffix settings
 
@@ -94,32 +118,31 @@ impl GrepBuffer {
             None => "".to_owned()
         };
 
-        let nick_color = weechat.info_get("nick_color_name", nick).unwrap();
+        // let nick_color = Weechat::info_get("nick_color_name", nick).unwrap();
 
         format!(
             "{}{}{}{}",
             prefix,
-            weechat.color(&nick_color),
+            Weechat::color("blue"),
             nick,
-            weechat.color("reset")
+            Weechat::color("reset")
         )
     }
 
     pub fn print_status(&self, line: &str) {
-        let weechat = self.buffer.get_weechat();
-        self.buffer.print(
+        self.buffer.upgrade().unwrap().print(
             &format!(
                 "{}[{}grep{}]{}\t{}",
-                weechat.color("chat_delimiters"),
-                weechat.color("chat_nick"),
-                weechat.color("chat_delimiters"),
-                weechat.color("reset"),
+                Weechat::color("chat_delimiters"),
+                Weechat::color("chat_nick"),
+                Weechat::color("chat_delimiters"),
+                Weechat::color("reset"),
                 line
             )
         )
     }
 
     pub fn switch_to(&self) {
-        self.buffer.switch_to();
+        self.buffer.upgrade().unwrap().switch_to();
     }
 }

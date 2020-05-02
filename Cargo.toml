@@ -9,18 +9,21 @@ name = "ripgrep"
 crate-type = ["dylib"]
 
 [dependencies]
-libc = "*"
+libc = "0.2.69"
 
-grep-searcher = "*"
-grep-matcher = "*"
-grep-regex = "*"
+grep-searcher = "0.1.7"
+grep-matcher = "0.1.4"
+grep-regex = "0.1.7"
 
-pipe-channel = "*"
+tokio = { version = "0.2.20", features = [ "rt-threaded", "sync" ] }
+weechat-sys = { path = "/home/poljar/werk/misc/rust-weechat/weechat-sys" }
+async-trait = "0.1.30"
 
-weechat = { git = "https://github.com/poljar/rust-weechat", rev = "4026a6d" }
-weechat-sys = { git = "https://github.com/poljar/rust-weechat", rev = "4026a6d" }
+[dependencies.weechat]
+path = "/home/poljar/werk/misc/rust-weechat/weechat-rs"
+features = ["async-executor"]
 
 [dependencies.clap]
-version = "*"
+version = "2.33.0"
 default-features = false
 features = [ "suggestions" ]

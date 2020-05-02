@@ -3,14 +3,14 @@ PREFIX ?= $(WEECHAT_HOME)
 SOURCES = src/lib.rs src/buffer.rs
 
 
-install: target/release/libripgrep.so install-dir
-	install -m644 target/release/libripgrep.so $(DESTDIR)$(PREFIX)/plugins/ripgrep.so
+install: target/debug/libripgrep.so install-dir
+	install -m644 target/debug/libripgrep.so $(DESTDIR)$(PREFIX)/plugins/ripgrep.so
 
 install-dir:
 	install -d $(DESTDIR)$(PREFIX)/plugins
 
-target/release/libripgrep.so: $(SOURCES)
-	cargo build --release
+target/debug/libripgrep.so: $(SOURCES)
+	cargo build
 
 format:
 	cargo fmt
