@@ -121,7 +121,7 @@ impl GrepBuffer {
         search_term: &str,
         file: &Path,
         duration: Duration,
-        result: &Vec<String>,
+        result: &[String],
     ) {
         self.print_status(&format!(
             "{summary_color}Search for {emph_color}{pattern}{summary_color} \

@@ -66,7 +66,7 @@ impl RipgrepCommand {
                 }
             }
         } else {
-            Weechat::print(&format!("Error searching: empty result"));
+            Weechat::print("Error searching: empty result");
             return;
         };
 
@@ -114,9 +114,9 @@ impl RipgrepCommand {
 
     /// Get the logger file for the given buffer from the infolist.
     fn file_from_infolist(&self, weechat: &Weechat, buffer: &Buffer) -> Option<String> {
-        let mut infolist = weechat.get_infolist("logger_buffer", None).ok()?;
+        let infolist = weechat.get_infolist("logger_buffer", None).ok()?;
 
-        while let Some(item) = infolist.next() {
+        for item in infolist {
             let info_buffer = if let Some(b) = item.get("buffer") {
                 b
             } else {
