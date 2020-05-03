@@ -70,6 +70,8 @@ impl RipgrepCommand {
             return;
         };
 
+        self.last_search_file.borrow_mut().replace(file.clone());
+
         let buffer = &self.buffer;
         let buffer_exists = buffer.borrow().is_some();
 
@@ -264,8 +266,6 @@ impl CommandCallback for RipgrepCommand {
             Some(f) => f,
             None => return,
         };
-
-        self.last_search_file.borrow_mut().replace(file.clone());
 
         let pattern = match parsed_args.value_of("pattern") {
             Some(p) => p,
