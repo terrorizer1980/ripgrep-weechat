@@ -16,11 +16,11 @@ grep-matcher = "0.1.4"
 grep-regex = "0.1.7"
 
 tokio = { version = "0.2.20", features = [ "rt-threaded", "sync" ] }
-weechat-sys = { path = "/home/poljar/werk/misc/rust-weechat/weechat-sys" }
+weechat-sys = { git = "https://github.com/poljar/rust-weechat" }
 async-trait = "0.1.30"
 
 [dependencies.weechat]
-path = "/home/poljar/werk/misc/rust-weechat/weechat-rs"
+git = "https://github.com/poljar/rust-weechat"
 features = ["async-executor"]
 
 [dependencies.clap]
