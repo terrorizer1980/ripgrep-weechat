@@ -1,14 +1,19 @@
 use crate::RipgrepCommand;
+use std::path::Path;
+use std::time::Duration;
 use weechat::buffer::{BufferHandle, BufferSettings};
 use weechat::Weechat;
 
-pub(crate) struct GrepBuffer {
+pub struct GrepBuffer {
     buffer: BufferHandle,
 }
 
 impl GrepBuffer {
-    pub(crate) fn new(command: &RipgrepCommand) -> GrepBuffer {
-        let settings = BufferSettings::new("ripgrep").input_callback(command.clone());
+    pub fn new(command: &RipgrepCommand) -> GrepBuffer {
+        let settings = BufferSettings::new("ripgrep")
+            .close_callback(command.clone())
+            .input_callback(command.clone());
+
         let buffer_handle = Weechat::buffer_new(settings).unwrap();
         let buffer = buffer_handle.upgrade().unwrap();
 
@@ -36,9 +41,10 @@ impl GrepBuffer {
         (date.trim(), nick.trim(), msg)
     }
 
-    pub fn format_line(&self, line: &str) -> String {
+    fn format_line(&self, line: &str) -> String {
         let (date, nick, msg) = GrepBuffer::split_line(line);
         let nick = self.colorize_nick(nick);
+
         format!(
             "{date_color}{date}{reset} {nick} {msg}",
             date_color = Weechat::color("brown"),
@@ -49,14 +55,14 @@ impl GrepBuffer {
         )
     }
 
-    pub fn print(&self, line: &str) {
+    fn print(&self, line: &str) {
         self.buffer
             .upgrade()
             .unwrap()
             .print(&self.format_line(line));
     }
 
-    pub fn colorize_nick(&self, nick: &str) -> String {
+    fn colorize_nick(&self, nick: &str) -> String {
         if nick.is_empty() {
             return "".to_owned();
         }
@@ -91,7 +97,7 @@ impl GrepBuffer {
         )
     }
 
-    pub fn print_status(&self, line: &str) {
+    fn print_status(&self, line: &str) {
         self.buffer.upgrade().unwrap().print(&format!(
             "{}[{}grep{}]{}\t{}",
             Weechat::color("chat_delimiters"),
@@ -102,7 +108,60 @@ impl GrepBuffer {
         ))
     }
 
+    fn set_title(&self, title: &str) {
+        self.buffer.upgrade().unwrap().set_title(title);
+    }
+
     pub fn switch_to(&self) {
         self.buffer.upgrade().unwrap().switch_to();
+    }
+
+    pub fn print_result(
+        &self,
+        search_term: &str,
+        file: &Path,
+        duration: Duration,
+        result: &Vec<String>,
+    ) {
+        self.print_status(&format!(
+            "{summary_color}Search for {emph_color}{pattern}{summary_color} \
+             in {emph_color}{file:?}{color_reset}.",
+            summary_color = Weechat::color("cyan"),
+            emph_color = Weechat::color("lightcyan"),
+            color_reset = Weechat::color("reset"),
+            pattern = search_term,
+            file = file
+        ));
+
+        let max_lines = std::cmp::min(result.len(), 4000);
+
+        for line in &result[..max_lines] {
+            self.print(&line);
+        }
+
+        self.print_status(&format!(
+            "{summary_color}{matches} matches \"{emph_color}{search_term}\
+            {summary_color}\" in {emph_color}{file:?}{color_reset}.",
+            summary_color = Weechat::color("cyan"),
+            emph_color = Weechat::color("lightcyan"),
+            matches = result.len(),
+            search_term = search_term,
+            file = file,
+            color_reset = Weechat::color("reset")
+        ));
+
+        let title = format!(
+            "'q': close buffer | Search in {color_title}{file:?}{color_reset} \
+            {matches} matches | pattern \"{color_title}{search_term}{color_reset}\" \
+            | {duration:?}",
+            color_title = Weechat::color("yellow"),
+            file = file,
+            color_reset = Weechat::color("reset"),
+            matches = result.len(),
+            search_term = search_term,
+            duration = duration,
+        );
+
+        self.set_title(&title);
     }
 }
